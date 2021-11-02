@@ -42,6 +42,7 @@ synthesis_path = os.path.join(save_folder, 'synthesis')
 entropy_path = os.path.join(save_folder, 'entropy')
 distance_path = os.path.join(save_folder, 'distance')
 perceptual_diff_path = os.path.join(save_folder, 'perceptual_diff')
+concatenated_path = os.path.join(save_folder, 'concatenated')
 
 os.makedirs(semantic_path, exist_ok=True)
 os.makedirs(anomaly_path, exist_ok=True)
@@ -49,6 +50,7 @@ os.makedirs(synthesis_path, exist_ok=True)
 os.makedirs(entropy_path, exist_ok=True)
 os.makedirs(distance_path, exist_ok=True)
 os.makedirs(perceptual_diff_path, exist_ok=True)
+os.makedirs(concatenated_path, exist_ok=True)
 
 for idx, image in enumerate(images):
     basename = os.path.basename(image).replace('.jpg', '.png')
@@ -76,4 +78,21 @@ for idx, image in enumerate(images):
 
     perceptual_diff = results['perceptual_diff'].convert('RGB')
     perceptual_diff.save(os.path.join(perceptual_diff_path,basename))
-
+    
+    w,h = anomaly_map.size
+    concat_img = Image.new('RGB', (2*w,2*h))
+    concat_img.paste(image, (0,0))
+    concat_img.paste(semantic_map, (w,0))
+    concat_img.paste(synthesis, (0,h))
+    concat_img.paste(anomaly_map, (w,h))
+    from PIL import ImageDraw, ImageFont
+    color = (0, 0, 0)
+    font = ImageFont.truetype("opensans.ttf", 62)
+    draw = ImageDraw.Draw(concat_img)
+    # font = ImageFont.truetype(<font-file>, <font-size>)
+    #draw.text
+    draw.text((0, 0), 'Original', color, font)
+    draw.text((w, 0), 'Segmented', color, font)
+    draw.text((0, h), 'GAN synthesis', color, font)
+    draw.text((w, h), 'Anomaly map', (255, 255, 255), font)
+    concat_img.save(os.path.join(concatenated_path,basename))
