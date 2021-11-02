@@ -48,6 +48,7 @@ class AnomalyDetector():
         # predict segmentation
         t0 = time.time()
         with torch.no_grad():
+            with torch.cuda.amp.autocast():
             seg_outs = self.seg_net(img_tensor.unsqueeze(0).cuda())
     
         torch.cuda.synchronize()
@@ -86,6 +87,7 @@ class AnomalyDetector():
         syn_input = {'label': label_tensor.unsqueeze(0), 'instance': instance_tensor.unsqueeze(0),
                      'image': image_tensor.unsqueeze(0)}
         
+        with torch.cuda.amp.autocast():
         generated = self.syn_net(syn_input, mode='inference')
     
         image_numpy = (np.transpose(generated.squeeze().cpu().numpy(), (1, 2, 0)) + 1) / 2.0
@@ -125,6 +127,7 @@ class AnomalyDetector():
     
         # run dissimilarity
         with torch.no_grad():
+            with torch.cuda.amp.autocast():
             if self.prior:
                 diss_pred = F.softmax(
                     self.diss_model(image_tensor, syn_image_tensor, semantic_tensor, entropy_tensor,
