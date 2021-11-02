@@ -1,4 +1,5 @@
 import os
+import time
 from PIL import Image
 import numpy as np
 import torch
@@ -45,9 +46,13 @@ class AnomalyDetector():
         img_tensor = self.img_transform(img)
     
         # predict segmentation
+        t0 = time.time()
         with torch.no_grad():
             seg_outs = self.seg_net(img_tensor.unsqueeze(0).cuda())
     
+        torch.cuda.synchronize()
+        t1 = time.time()
+
         seg_softmax_out = F.softmax(seg_outs, dim=1)
         seg_final = np.argmax(seg_outs.cpu().numpy().squeeze(), axis=0)  # segmentation map
     
@@ -146,6 +151,7 @@ class AnomalyDetector():
         out = {'anomaly_map': diss_pred, 'segmentation': seg_img, 'synthesis': synthesis,
                'softmax_entropy':entropy, 'perceptual_diff': perceptual_diff, 'softmax_distance': distance}
     
+        print("Timing seg {} ".format(t1 - t0))
         return out
     
     # Loop around all figures

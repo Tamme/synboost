@@ -3,6 +3,7 @@ import os
 from PIL import Image
 from estimator import AnomalyDetector
 import numpy as np
+import time
 
 # function for segmentations
 palette = [128, 64, 128, 244, 35, 232, 70, 70, 70, 102, 102, 156, 190, 153, 153,
@@ -53,7 +54,10 @@ for idx, image in enumerate(images):
     basename = os.path.basename(image).replace('.jpg', '.png')
     print('Evaluating image %i out of %i'%(idx+1, len(images)))
     image = Image.open(image)
+    t0 = time.time()
     results = detector.estimator_image(image)
+    t1 = time.time()
+    print("Time {}".format(t1 - t0))
 
     anomaly_map = results['anomaly_map'].convert('RGB')
     anomaly_map.save(os.path.join(anomaly_path,basename))
