@@ -33,7 +33,10 @@ demo_folder = opts.demo_folder
 save_folder = opts.save_folder
 
 images = [os.path.join(demo_folder, image) for image in os.listdir(demo_folder)]
-detector = AnomalyDetector(True)
+DETECTOR = "Original" #TODO - find name
+if "icnet" in save_folder.lower():
+    DETECTOR = "ICNet"
+detector = AnomalyDetector(True, DETECTOR)
 
 # Save folders
 semantic_path = os.path.join(save_folder, 'semantic')
