@@ -49,14 +49,16 @@ class AnomalyDetector():
         t0 = time.time()
         with torch.no_grad():
             with torch.cuda.amp.autocast():
-            seg_outs = self.seg_net(img_tensor.unsqueeze(0).cuda())
-    
+                seg_outs = self.seg_net(img_tensor.unsqueeze(0).cuda())
+        
         torch.cuda.synchronize()
         t1 = time.time()
 
         seg_softmax_out = F.softmax(seg_outs, dim=1)
-        seg_final = np.argmax(seg_outs.cpu().numpy().squeeze(), axis=0)  # segmentation map
-    
+
+        # seg_final = np.argmax(seg_outs.cpu().numpy().squeeze(), axis=0)  # segmentation map
+        seg_final = torch.argmax(torch.squeeze(seg_outs), axis=0).cpu().numpy()
+
         # get entropy
         entropy = torch.sum(-seg_softmax_out * torch.log(seg_softmax_out), dim=1)
         entropy = (entropy - entropy.min()) / entropy.max()
@@ -88,7 +90,7 @@ class AnomalyDetector():
                      'image': image_tensor.unsqueeze(0)}
         
         with torch.cuda.amp.autocast():
-        generated = self.syn_net(syn_input, mode='inference')
+            generated = self.syn_net(syn_input, mode='inference')
     
         image_numpy = (np.transpose(generated.squeeze().cpu().numpy(), (1, 2, 0)) + 1) / 2.0
         synthesis_final_img = Image.fromarray((image_numpy * 255).astype(np.uint8))
@@ -128,13 +130,13 @@ class AnomalyDetector():
         # run dissimilarity
         with torch.no_grad():
             with torch.cuda.amp.autocast():
-            if self.prior:
-                diss_pred = F.softmax(
-                    self.diss_model(image_tensor, syn_image_tensor, semantic_tensor, entropy_tensor,
-                                    perceptual_diff_tensor,
-                                    distance_tensor), dim=1)
-            else:
-                diss_pred = F.softmax(self.diss_model(image_tensor, syn_image_tensor, semantic_tensor), dim=1)
+                if self.prior:
+                    diss_pred = F.softmax(
+                        self.diss_model(image_tensor, syn_image_tensor, semantic_tensor, entropy_tensor,
+                                        perceptual_diff_tensor,
+                                        distance_tensor), dim=1)
+                else:
+                    diss_pred = F.softmax(self.diss_model(image_tensor, syn_image_tensor, semantic_tensor), dim=1)
         diss_pred = diss_pred.cpu().numpy()
     
         # do ensemble if necessary
