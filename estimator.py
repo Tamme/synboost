@@ -53,8 +53,20 @@ class AnomalyDetector():
     def estimator_image(self, image):
         image_og_h = image.size[1]
         image_og_w = image.size[0]
-        img = image.resize((2048, 1024))
-        img_tensor = self.img_transform(img)
+        img = image.resize((2048, 1024), resample=Image.BILINEAR) #matches cv2
+        if self.detector == ICNET:
+           
+            #image_cv2 = cv2.resize(image_cv2, (2048, 1024))
+            #image_cv2 = np.asarray(image_cv2, np.float32)
+            #image_cv2 -= IMG_MEAN
+            #image_cv2 /= IMG_VARS
+            img_np = np.asarray(img, np.float32)
+            img_np = img_np[:,:,::-1] #to bgr
+            img_np = img_np.transpose((2, 0, 1))
+            img_tensor = torch.from_numpy(img_np.copy())
+            img_tensor = self.icnet_transform(img_tensor)
+        else:
+            img_tensor = self.img_transform(image)
     
         # predict segmentation
         t0 = time.time()
@@ -66,16 +78,13 @@ class AnomalyDetector():
         t1 = time.time()
 
         if type(seg_outs) == list:
-            for i in range(len(seg_outs)):
-                print("ICNET", type(seg_outs[i]), seg_outs[i].shape)
-            seg_softmax_out = F.softmax(seg_outs[0], dim=1)
-            #seg_final = np.argmax(seg_outs[0].cpu().numpy().squeeze(), axis=0)  # segmentation map
-            seg_final = torch.argmax(torch.squeeze(seg_outs[0]), axis=0).cpu().numpy()
-        #RES <class 'list'> 4
         #<class 'torch.Tensor'> torch.Size([1, 19, 1024, 2048])
         #<class 'torch.Tensor'> torch.Size([1, 19, 256, 512])
         #<class 'torch.Tensor'> torch.Size([1, 19, 128, 256])
         #<class 'torch.Tensor'> torch.Size([1, 19, 65, 129])
+            seg_softmax_out = F.softmax(seg_outs[0], dim=1)
+            #seg_final = np.argmax(seg_outs[0].cpu().numpy().squeeze(), axis=0)  # segmentation map
+            seg_final = torch.argmax(torch.squeeze(seg_outs[0]), axis=0).cpu().numpy()
         elif type(seg_outs) == torch.Tensor:
             print("FULL", type(seg_outs), seg_outs.shape)
         seg_softmax_out = F.softmax(seg_outs, dim=1)
@@ -308,15 +317,20 @@ class AnomalyDetector():
         self.opt.dataset_cls = cityscapes
         if "icnet" in self.opt.snapshot:
             net = icnet()
+            saved_state_dict = torch.load(self.opt.snapshot)
+            #TODO hacky, but produced correct output now, using weight loading from FastSeg, not restore_snapshot
+            net.load_state_dict(saved_state_dict,strict=False)
+            self.seg_net = net
         else:
         net = network.get_net(self.opt, criterion=None)
 
         net = torch.nn.DataParallel(net).cuda()
-        print('Segmentation Net Built.')
         snapshot = os.path.join(os.getcwd(), os.path.dirname(__file__), self.opt.snapshot)
         self.seg_net, _ = restore_snapshot(net, optimizer=None, snapshot=snapshot,
                                            restore_optimizer_bool=False)
+        print('Segmentation Net Built.')
         self.seg_net.eval()
+        self.seg_net.cuda()
         print('Segmentation Net Restored.')
         
     def get_synthesis(self):
@@ -358,6 +372,9 @@ class AnomalyDetector():
         # Transform images to Tensor based on ImageNet Mean and STD
         mean_std = ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         self.img_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(*mean_std)])
+        
+        icnet_mean_std = ([104.00698793, 116.66876762, 122.67891434], [1, 1, 1]) #BGR
+        self.icnet_transform = transforms.Compose([transforms.Normalize(*icnet_mean_std)])
     
         # synthesis necessary pre-process
         self.transform_semantic = transforms.Compose(

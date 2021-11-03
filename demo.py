@@ -1,9 +1,10 @@
 import argparse
 import os
 from PIL import Image
-from estimator import AnomalyDetector
+from estimator import AnomalyDetector, ICNET
 import numpy as np
 import time
+import cv2
 
 # function for segmentations
 palette = [128, 64, 128, 244, 35, 232, 70, 70, 70, 102, 102, 156, 190, 153, 153,
@@ -33,9 +34,9 @@ demo_folder = opts.demo_folder
 save_folder = opts.save_folder
 
 images = [os.path.join(demo_folder, image) for image in os.listdir(demo_folder)]
-DETECTOR = "Original" #TODO - find name
+DETECTOR = "DeepLabV3"
 if "icnet" in save_folder.lower():
-    DETECTOR = "ICNet"
+    DETECTOR = ICNET
 detector = AnomalyDetector(True, DETECTOR)
 
 # Save folders
@@ -55,10 +56,11 @@ os.makedirs(distance_path, exist_ok=True)
 os.makedirs(perceptual_diff_path, exist_ok=True)
 os.makedirs(concatenated_path, exist_ok=True)
 
-for idx, image in enumerate(images):
-    basename = os.path.basename(image).replace('.jpg', '.png')
+for idx, image_path in enumerate(images):
+    basename = os.path.basename(image_path).replace('.jpg', '.png')
     print('Evaluating image %i out of %i'%(idx+1, len(images)))
-    image = Image.open(image)
+    image = Image.open(image_path)
+    #image_cv2 = cv2.imread(image_path, cv2.IMREAD_COLOR)
     t0 = time.time()
     results = detector.estimator_image(image)
     t1 = time.time()
@@ -93,9 +95,8 @@ for idx, image in enumerate(images):
     font = ImageFont.truetype("opensans.ttf", 62)
     draw = ImageDraw.Draw(concat_img)
     # font = ImageFont.truetype(<font-file>, <font-size>)
-    #draw.text
     draw.text((0, 0), 'Original', color, font)
-    draw.text((w, 0), 'Segmented', color, font)
+    draw.text((w, 0), 'Segmented by {}'.format(DETECTOR), color, font)
     draw.text((0, h), 'GAN synthesis', color, font)
     draw.text((w, h), 'Anomaly map', (255, 255, 255), font)
     concat_img.save(os.path.join(concatenated_path,basename))
