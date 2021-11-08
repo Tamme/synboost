@@ -1,7 +1,7 @@
 import argparse
 import os
 from PIL import Image
-from estimator import AnomalyDetector, ICNET
+from estimator import AnomalyDetector, ICNET, USE_SPADE
 import numpy as np
 import time
 import cv2

@@ -1,5 +1,6 @@
 import os
 import time
+import copy
 from PIL import Image
 import numpy as np
 import torch
@@ -18,8 +19,14 @@ from optimizer import restore_snapshot
 from datasets import cityscapes
 from config import assert_and_infer_cfg
 
-sys.path.insert(0, os.path.join(os.getcwd(), os.path.dirname(__file__), 'image_synthesis'))
-from image_synthesis.models.pix2pix_model import Pix2PixModel
+USE_SPADE = False
+
+if USE_SPADE:
+    sys.path.insert(0, os.path.join(os.getcwd(), os.path.dirname(__file__), 'image_synthesis_spade'))
+    from image_synthesis_spade.models.pix2pix_model import Pix2PixModel
+else:
+    sys.path.insert(0, os.path.join(os.getcwd(), os.path.dirname(__file__), 'image_synthesis'))
+    from image_synthesis.models.pix2pix_model import Pix2PixModel
 from image_dissimilarity.models.dissimilarity_model import DissimNetPrior, DissimNet
 from image_dissimilarity.models.vgg_features import VGG19_difference
 from image_dissimilarity.data.cityscapes_dataset import one_hot_encoding
@@ -28,20 +35,31 @@ import sys
 sys.path.insert(0, os.path.join(os.getcwd(), os.path.dirname(__file__), 'image_segmentation_icnet'))
 from libs.models.ICNet import icnet
 
+ICNET = "ICNet"
+DEEPLAB = "DeepLabV3"
 
 
 class AnomalyDetector():
-    def __init__(self, ours=True, detector="Original", seed=0, fishyscapes_wrapper=True):
+    def __init__(self, ours=True, detector=DEEPLAB, seed=0, fishyscapes_wrapper=True):
         
         self.set_seeds(seed)
-        
+        self.detector = detector
+
         # Common options for all models
-        if detector == "ICNet":
-            print("Using ICNet")
-            TestOptions = ConfigLight()
+        if detector == ICNET:
+            #operates in range ~ [-128, 128] BGR
+            print("Using {}".format(ICNET))
+            TestOptions = ConfigLight(USE_SPADE)
+        elif detector == DEEPLAB:
+            print("Using {}".format(DEEPLAB))
+            #operates in range ~ [-4, 4] RGB
+            TestOptions = Config()
         else:
-            print("Using Full network")
-        TestOptions = Config()
+            print("Unexpected seg network. Exiting")
+            return
+
+        print("Using SPADE synthesizer: {}".format(USE_SPADE))
+            
         self.opt = TestOptions
         torch.cuda.empty_cache()
         self.get_segmentation()
@@ -67,29 +85,28 @@ class AnomalyDetector():
             img_tensor = self.icnet_transform(img_tensor)
         else:
             img_tensor = self.img_transform(image)
-    
+
         # predict segmentation
         t0 = time.time()
         with torch.no_grad():
-            with torch.cuda.amp.autocast():
-                seg_outs = self.seg_net(img_tensor.unsqueeze(0).cuda())
+            #with torch.cuda.amp.autocast(): #caused NaN-s in later computations (eg entropy.max()), so disabling for now.
+            seg_outs = self.seg_net(img_tensor.unsqueeze(0).cuda())
         
         torch.cuda.synchronize()
         t1 = time.time()
 
         if type(seg_outs) == list:
-        #<class 'torch.Tensor'> torch.Size([1, 19, 1024, 2048])
-        #<class 'torch.Tensor'> torch.Size([1, 19, 256, 512])
-        #<class 'torch.Tensor'> torch.Size([1, 19, 128, 256])
-        #<class 'torch.Tensor'> torch.Size([1, 19, 65, 129])
+            #<class 'torch.Tensor'> torch.Size([1, 19, 1024, 2048])
+            #<class 'torch.Tensor'> torch.Size([1, 19, 256, 512])
+            #<class 'torch.Tensor'> torch.Size([1, 19, 128, 256])
+            #<class 'torch.Tensor'> torch.Size([1, 19, 65, 129])
             seg_softmax_out = F.softmax(seg_outs[0], dim=1)
             #seg_final = np.argmax(seg_outs[0].cpu().numpy().squeeze(), axis=0)  # segmentation map
             seg_final = torch.argmax(torch.squeeze(seg_outs[0]), axis=0).cpu().numpy()
         elif type(seg_outs) == torch.Tensor:
-            print("FULL", type(seg_outs), seg_outs.shape)
-        seg_softmax_out = F.softmax(seg_outs, dim=1)
+            seg_softmax_out = F.softmax(seg_outs, dim=1)
             #seg_final = np.argmax(seg_outs.cpu().numpy().squeeze(), axis=0)  # segmentation map
-        seg_final = torch.argmax(torch.squeeze(seg_outs), axis=0).cpu().numpy()
+            seg_final = torch.argmax(torch.squeeze(seg_outs), axis=0).cpu().numpy()
         t11 = time.time()
 
         # get entropy
@@ -125,9 +142,9 @@ class AnomalyDetector():
                      'image': image_tensor.unsqueeze(0)}
         t2 = time.time()
         
-        with torch.cuda.amp.autocast():
-            generated = self.syn_net(syn_input, mode='inference')
-    
+        #with torch.cuda.amp.autocast():
+        generated = self.syn_net(syn_input, mode='inference')
+
         t3 = time.time()
     
         image_numpy = (np.transpose(generated.squeeze().cpu().numpy(), (1, 2, 0)) + 1) / 2.0
@@ -168,16 +185,14 @@ class AnomalyDetector():
     
         # run dissimilarity
         with torch.no_grad():
-            with torch.cuda.amp.autocast():
-                if self.prior:
-                    diss_pred = F.softmax(
-                        self.diss_model(image_tensor, syn_image_tensor, semantic_tensor, entropy_tensor,
-                                        perceptual_diff_tensor,
-                                        distance_tensor), dim=1)
-                else:
-                    diss_pred = F.softmax(self.diss_model(image_tensor, syn_image_tensor, semantic_tensor), dim=1)
+            #with torch.cuda.amp.autocast():
+            if self.prior:
+                diss_pred = F.softmax(self.diss_model(image_tensor, syn_image_tensor, semantic_tensor, 
+                                    entropy_tensor, perceptual_diff_tensor,distance_tensor), dim=1)
+            else:
+                diss_pred = F.softmax(self.diss_model(image_tensor, syn_image_tensor, semantic_tensor), dim=1)
+        torch.cuda.synchronize()
         diss_pred = diss_pred.cpu().numpy()
-    
         # do ensemble if necessary
         if self.ensemble:
             diss_pred = diss_pred[:, 1, :, :] * 0.75 + entropy_tensor.cpu().numpy() * 0.25
@@ -186,9 +201,9 @@ class AnomalyDetector():
         t5 = time.time()
         print(
             "Seg time {} sec, processing {}, synthesis time {}, processing {}, dissimilarity time {}".format(
-                t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4  
+                t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4,
             ))
-            
+         
         # Resize outputs to original input image size
         diss_pred = Image.fromarray(diss_pred.squeeze()*255).resize((image_og_w, image_og_h))
         seg_img = semantic.resize((image_og_w, image_og_h))
@@ -207,15 +222,26 @@ class AnomalyDetector():
     def estimator_worker(self, image):
         image_og_h = image.shape[0]
         image_og_w = image.shape[1]
-        img = Image.fromarray(np.array(image)).convert('RGB').resize((2048, 1024))
-        img_tensor = self.img_transform(img)
-        
+        img = Image.fromarray(np.array(image)).convert('RGB').resize((2048, 1024), resample=Image.BILINEAR)
+        if self.detector == ICNET:
+            img_np = np.asarray(img, np.float32)
+            img_np = img_np[:,:,::-1] #to bgr
+            img_np = img_np.transpose((2, 0, 1))
+            img_tensor = torch.from_numpy(img_np.copy())
+            img_tensor = self.icnet_transform(img_tensor)
+        else:
+            img_tensor = self.img_transform(img)
+
         # predict segmentation
         with torch.no_grad():
             seg_outs = self.seg_net(img_tensor.unsqueeze(0).cuda())
         
-        seg_softmax_out = F.softmax(seg_outs, dim=1)
-        seg_final = np.argmax(seg_outs.cpu().numpy().squeeze(), axis=0)  # segmentation map
+        if type(seg_outs) == list:
+            seg_softmax_out = F.softmax(seg_outs[0], dim=1)
+            seg_final = torch.argmax(torch.squeeze(seg_outs[0]), axis=0).cpu().numpy()
+        else:
+            seg_softmax_out = F.softmax(seg_outs, dim=1)
+            seg_final = torch.argmax(torch.squeeze(seg_outs), axis=0).cpu().numpy()
         
         # get entropy
         entropy = torch.sum(-seg_softmax_out * torch.log(seg_softmax_out), dim=1)
@@ -322,12 +348,12 @@ class AnomalyDetector():
             net.load_state_dict(saved_state_dict,strict=False)
             self.seg_net = net
         else:
-        net = network.get_net(self.opt, criterion=None)
+            net = network.get_net(self.opt, criterion=None)
 
-        net = torch.nn.DataParallel(net).cuda()
-        snapshot = os.path.join(os.getcwd(), os.path.dirname(__file__), self.opt.snapshot)
-        self.seg_net, _ = restore_snapshot(net, optimizer=None, snapshot=snapshot,
-                                           restore_optimizer_bool=False)
+            net = torch.nn.DataParallel(net).cuda()
+            snapshot = os.path.join(os.getcwd(), os.path.dirname(__file__), self.opt.snapshot)
+            self.seg_net, _ = restore_snapshot(net, optimizer=None, snapshot=snapshot,
+                                            restore_optimizer_bool=False)
         print('Segmentation Net Built.')
         self.seg_net.eval()
         self.seg_net.cuda()
@@ -398,10 +424,14 @@ if __name__ == '__main__':
     # define fishyscapes test parameters
     fs = bdlb.load(benchmark="fishyscapes")
     # automatically downloads the dataset
-    data = fs.get_dataset('Static')
-    detector = AnomalyDetector(True)
+    #data = fs.get_dataset('Static')
+    data = fs.get_dataset('LostAndFound')
+    #segmodel = "Original"
+    segmodel = ICNET
+    detector = AnomalyDetector(ours=True, detector=segmodel)
     metrics = fs.evaluate(detector.estimator_worker, data)
     
-    print('My method achieved {:.2f}% AP'.format(100 * metrics['AP']))
-    print('My method achieved {:.2f}% FPR@95TPR'.format(100 * metrics['FPR@95%TPR']))
-    print('My method achieved {:.2f}% auroc'.format(100 * metrics['auroc']))
+    print("Seg model is {} with priors/enc_maps: {}".format(detector.detector, detector.prior))
+    print('{:.2f}% AP'.format(100 * metrics['AP']))
+    print('{:.2f}% FPR@95TPR'.format(100 * metrics['FPR@95%TPR']))
+    print('{:.2f}% auroc'.format(100 * metrics['auroc']))
