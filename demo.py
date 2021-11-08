@@ -28,6 +28,7 @@ def colorize_mask(mask):
 parser = argparse.ArgumentParser()
 parser.add_argument('--demo_folder', type=str, default='./sample_images', help='Path to folder with images to be run.')
 parser.add_argument('--save_folder', type=str, default='./results', help='Folder to where to save the results')
+parser.add_argument('--verbose_save', type=bool, default=False, help='Save each output separately')
 opts = parser.parse_args()
 
 demo_folder = opts.demo_folder
@@ -37,7 +38,7 @@ images = [os.path.join(demo_folder, image) for image in os.listdir(demo_folder)]
 DETECTOR = "DeepLabV3"
 if "icnet" in save_folder.lower():
     DETECTOR = ICNET
-detector = AnomalyDetector(True, DETECTOR)
+detector = AnomalyDetector(ours=True, detector=DETECTOR)
 
 # Save folders
 semantic_path = os.path.join(save_folder, 'semantic')
@@ -48,12 +49,13 @@ distance_path = os.path.join(save_folder, 'distance')
 perceptual_diff_path = os.path.join(save_folder, 'perceptual_diff')
 concatenated_path = os.path.join(save_folder, 'concatenated')
 
-os.makedirs(semantic_path, exist_ok=True)
-os.makedirs(anomaly_path, exist_ok=True)
-os.makedirs(synthesis_path, exist_ok=True)
-os.makedirs(entropy_path, exist_ok=True)
-os.makedirs(distance_path, exist_ok=True)
-os.makedirs(perceptual_diff_path, exist_ok=True)
+if opts.verbose_save:
+    os.makedirs(semantic_path, exist_ok=True)
+    os.makedirs(anomaly_path, exist_ok=True)
+    os.makedirs(synthesis_path, exist_ok=True)
+    os.makedirs(entropy_path, exist_ok=True)
+    os.makedirs(distance_path, exist_ok=True)
+    os.makedirs(perceptual_diff_path, exist_ok=True)
 os.makedirs(concatenated_path, exist_ok=True)
 
 for idx, image_path in enumerate(images):
@@ -66,37 +68,52 @@ for idx, image_path in enumerate(images):
     t1 = time.time()
     print("Time {}".format(t1 - t0))
 
+    basename = os.path.basename(image_path).replace('.png', '.jpg')
     anomaly_map = results['anomaly_map'].convert('RGB')
-    anomaly_map.save(os.path.join(anomaly_path,basename))
+    if opts.verbose_save:
 
-    semantic_map = colorize_mask(np.array(results['segmentation']))
-    semantic_map.save(os.path.join(semantic_path,basename))
+        anomaly_map.save(os.path.join(anomaly_path,basename))
 
-    synthesis = results['synthesis']
-    synthesis.save(os.path.join(synthesis_path,basename))
+    semantic_map = colorize_mask(np.array(results['segmentation'])).convert('RGB')
+    if opts.verbose_save:
+        semantic_map.save(os.path.join(semantic_path,basename))
+
+    synthesis = results['synthesis'].convert('RGB')
+    if opts.verbose_save:
+        synthesis.save(os.path.join(synthesis_path,basename))
 
     softmax_entropy = results['softmax_entropy'].convert('RGB')
-    softmax_entropy.save(os.path.join(entropy_path,basename))
+    if opts.verbose_save:
+        softmax_entropy.save(os.path.join(entropy_path,basename))
 
     softmax_distance = results['softmax_distance'].convert('RGB')
-    softmax_distance.save(os.path.join(distance_path,basename))
+    if opts.verbose_save:
+        softmax_distance.save(os.path.join(distance_path,basename))
 
     perceptual_diff = results['perceptual_diff'].convert('RGB')
-    perceptual_diff.save(os.path.join(perceptual_diff_path,basename))
+    if opts.verbose_save:
+        perceptual_diff.save(os.path.join(perceptual_diff_path,basename))
     
     w,h = anomaly_map.size
-    concat_img = Image.new('RGB', (2*w,2*h))
+    concat_img = Image.new('RGB', (2*w,4*h))
     concat_img.paste(image, (0,0))
     concat_img.paste(semantic_map, (w,0))
     concat_img.paste(synthesis, (0,h))
     concat_img.paste(anomaly_map, (w,h))
+    concat_img.paste(softmax_entropy, (0,2*h))
+    concat_img.paste(softmax_distance, (w,2*h))
+    concat_img.paste(perceptual_diff, (0,3*h))
+    
     from PIL import ImageDraw, ImageFont
-    color = (0, 0, 0)
+    color = (57, 255, 20)
     font = ImageFont.truetype("opensans.ttf", 62)
     draw = ImageDraw.Draw(concat_img)
     # font = ImageFont.truetype(<font-file>, <font-size>)
     draw.text((0, 0), 'Original', color, font)
     draw.text((w, 0), 'Segmented by {}'.format(DETECTOR), color, font)
-    draw.text((0, h), 'GAN synthesis', color, font)
-    draw.text((w, h), 'Anomaly map', (255, 255, 255), font)
+    draw.text((0, h), '{} GAN synthesis'.format("SPADE" if USE_SPADE else "CC-FPSE"), color, font)
+    draw.text((w, h), 'Anomaly map {}'.format('with prior' if detector.prior else ": no prior"), color, font)
+    draw.text((0, 2*h), 'Softmax entropy', color, font)
+    draw.text((w, 2*h), 'Softmax distance', color, font)
+    draw.text((0, 3*h), 'Perceptual diff', color, font)
     concat_img.save(os.path.join(concatenated_path,basename))
