@@ -1,7 +1,7 @@
 import argparse
 import os
 from PIL import Image
-from estimator import AnomalyDetector, ICNET, USE_SPADE
+from estimator import AnomalyDetector, ICNET, DEEPLAB, SPADE, CCFPSE
 import numpy as np
 import time
 import cv2
@@ -29,16 +29,20 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--demo_folder', type=str, default='./sample_images', help='Path to folder with images to be run.')
 parser.add_argument('--save_folder', type=str, default='./results', help='Folder to where to save the results')
 parser.add_argument('--verbose_save', type=bool, default=False, help='Save each output separately')
+parser.add_argument('--fp16', type=bool, default=False, help='Do mixed precision calculations')
 opts = parser.parse_args()
-
-demo_folder = opts.demo_folder
 save_folder = opts.save_folder
 
-images = [os.path.join(demo_folder, image) for image in os.listdir(demo_folder)]
-DETECTOR = "DeepLabV3"
+images = [os.path.join(opts.demo_folder, image) for image in os.listdir(opts.demo_folder)]
+
+DETECTOR = DEEPLAB
+SYNTHESIZER = CCFPSE
 if "icnet" in save_folder.lower():
     DETECTOR = ICNET
-detector = AnomalyDetector(ours=True, detector=DETECTOR)
+if "spade" in save_folder.lower():
+    SYNTHESIZER = SPADE
+
+detector = AnomalyDetector(ours=True, detector=DETECTOR, synthesizer=SYNTHESIZER, fp16=opts.fp16)
 
 # Save folders
 semantic_path = os.path.join(save_folder, 'semantic')
@@ -111,9 +115,11 @@ for idx, image_path in enumerate(images):
     # font = ImageFont.truetype(<font-file>, <font-size>)
     draw.text((0, 0), 'Original', color, font)
     draw.text((w, 0), 'Segmented by {}'.format(DETECTOR), color, font)
-    draw.text((0, h), '{} GAN synthesis'.format("SPADE" if USE_SPADE else "CC-FPSE"), color, font)
+    draw.text((0, h), '{} GAN synthesis'.format(SYNTHESIZER), color, font)
     draw.text((w, h), 'Anomaly map {}'.format('with prior' if detector.prior else ": no prior"), color, font)
     draw.text((0, 2*h), 'Softmax entropy', color, font)
     draw.text((w, 2*h), 'Softmax distance', color, font)
     draw.text((0, 3*h), 'Perceptual diff', color, font)
+    draw.text((w, 3*h), results['text'], color, font)
+
     concat_img.save(os.path.join(concatenated_path,basename))

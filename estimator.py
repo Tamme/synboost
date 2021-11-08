@@ -19,14 +19,6 @@ from optimizer import restore_snapshot
 from datasets import cityscapes
 from config import assert_and_infer_cfg
 
-USE_SPADE = False
-
-if USE_SPADE:
-    sys.path.insert(0, os.path.join(os.getcwd(), os.path.dirname(__file__), 'image_synthesis_spade'))
-    from image_synthesis_spade.models.pix2pix_model import Pix2PixModel
-else:
-    sys.path.insert(0, os.path.join(os.getcwd(), os.path.dirname(__file__), 'image_synthesis'))
-    from image_synthesis.models.pix2pix_model import Pix2PixModel
 from image_dissimilarity.models.dissimilarity_model import DissimNetPrior, DissimNet
 from image_dissimilarity.models.vgg_features import VGG19_difference
 from image_dissimilarity.data.cityscapes_dataset import one_hot_encoding
@@ -37,19 +29,32 @@ from libs.models.ICNet import icnet
 
 ICNET = "ICNet"
 DEEPLAB = "DeepLabV3"
+SPADE = "SPADE"
+CCFPSE = "CC-FPSE"
 
 
 class AnomalyDetector():
-    def __init__(self, ours=True, detector=DEEPLAB, seed=0, fishyscapes_wrapper=True):
+    def __init__(self, ours=True, detector=DEEPLAB, synthesizer=CCFPSE, fp16=False, seed=0, fishyscapes_wrapper=True):
         
-        self.set_seeds(seed)
         self.detector = detector
+        self.synthesizer = synthesizer
+        self.fp16 = fp16
+        self.set_seeds(seed)
+
+        global Pix2PixModel
+        if self.synthesizer == SPADE:
+            sys.path.insert(0, os.path.join(os.getcwd(), os.path.dirname(__file__), 'image_synthesis_spade'))
+            from image_synthesis_spade.models.pix2pix_model import Pix2PixModel
+        else:
+            sys.path.insert(0, os.path.join(os.getcwd(), os.path.dirname(__file__), 'image_synthesis'))
+            from image_synthesis.models.pix2pix_model import Pix2PixModel
+
 
         # Common options for all models
         if detector == ICNET:
             #operates in range ~ [-128, 128] BGR
             print("Using {}".format(ICNET))
-            TestOptions = ConfigLight(USE_SPADE)
+            TestOptions = ConfigLight(self.synthesizer == SPADE)
         elif detector == DEEPLAB:
             print("Using {}".format(DEEPLAB))
             #operates in range ~ [-4, 4] RGB
@@ -58,7 +63,8 @@ class AnomalyDetector():
             print("Unexpected seg network. Exiting")
             return
 
-        print("Using SPADE synthesizer: {}".format(USE_SPADE))
+        print("Using SPADE synthesizer: {}".format(self.synthesizer == SPADE))
+        print("Using fp16: {}".format(self.fp16))
             
         self.opt = TestOptions
         torch.cuda.empty_cache()
@@ -89,8 +95,8 @@ class AnomalyDetector():
         # predict segmentation
         t0 = time.time()
         with torch.no_grad():
-            #with torch.cuda.amp.autocast(): #caused NaN-s in later computations (eg entropy.max()), so disabling for now.
-            seg_outs = self.seg_net(img_tensor.unsqueeze(0).cuda())
+            with torch.cuda.amp.autocast(enabled=self.fp16): #fyi causes NaN-s in later computations (eg entropy.max()) for deeplab
+                seg_outs = self.seg_net(img_tensor.unsqueeze(0).cuda())
         
         torch.cuda.synchronize()
         t1 = time.time()
@@ -142,8 +148,8 @@ class AnomalyDetector():
                      'image': image_tensor.unsqueeze(0)}
         t2 = time.time()
         
-        #with torch.cuda.amp.autocast():
-        generated = self.syn_net(syn_input, mode='inference')
+        with torch.cuda.amp.autocast(enabled=self.fp16):
+            generated = self.syn_net(syn_input, mode='inference')
 
         t3 = time.time()
     
@@ -185,12 +191,12 @@ class AnomalyDetector():
     
         # run dissimilarity
         with torch.no_grad():
-            #with torch.cuda.amp.autocast():
-            if self.prior:
-                diss_pred = F.softmax(self.diss_model(image_tensor, syn_image_tensor, semantic_tensor, 
-                                    entropy_tensor, perceptual_diff_tensor,distance_tensor), dim=1)
-            else:
-                diss_pred = F.softmax(self.diss_model(image_tensor, syn_image_tensor, semantic_tensor), dim=1)
+            with torch.cuda.amp.autocast(enabled=self.fp16):
+                if self.prior:
+                    diss_pred = F.softmax(self.diss_model(image_tensor, syn_image_tensor, semantic_tensor, 
+                                        entropy_tensor, perceptual_diff_tensor,distance_tensor), dim=1)
+                else:
+                    diss_pred = F.softmax(self.diss_model(image_tensor, syn_image_tensor, semantic_tensor), dim=1)
         torch.cuda.synchronize()
         diss_pred = diss_pred.cpu().numpy()
         # do ensemble if necessary
@@ -199,10 +205,10 @@ class AnomalyDetector():
         else:
             diss_pred = diss_pred[:, 1, :, :]
         t5 = time.time()
-        print(
-            "Seg time {} sec, processing {}, synthesis time {}, processing {}, dissimilarity time {}".format(
-                t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4,
-            ))
+        text_output = "Fp 16: {} \n".format(self.fp16)
+        text_output +=  "Segmentation {} sec \nProcessing {} sec \nSynthesis {} sec\nProcessing {} sec\nDissimilarity net {} sec\nTotal {}sec\n".format(
+                round(t1 - t0, 4), round(t2 - t1, 4), round(t3 - t2, 4), round(t4 - t3, 4), round(t5 - t4, 4), round(t5 - t0, 4))
+        print(text_output)
          
         # Resize outputs to original input image size
         diss_pred = Image.fromarray(diss_pred.squeeze()*255).resize((image_og_w, image_og_h))
@@ -213,7 +219,7 @@ class AnomalyDetector():
         synthesis = synthesis_final_img.resize((image_og_w, image_og_h))
         
         out = {'anomaly_map': diss_pred, 'segmentation': seg_img, 'synthesis': synthesis,
-               'softmax_entropy':entropy, 'perceptual_diff': perceptual_diff, 'softmax_distance': distance}
+               'softmax_entropy':entropy, 'perceptual_diff': perceptual_diff, 'softmax_distance': distance, 'text': text_output}
     
         print("Timing seg {} ".format(t1 - t0))
         return out
