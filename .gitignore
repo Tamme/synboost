@@ -9,6 +9,8 @@ logs/
 /models/
 *.onnx
 *.png
+*.jpg
+*.zip
 image_segmentation_psa/exp/*
 *.tar
 demo_files/
