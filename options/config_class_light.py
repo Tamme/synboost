@@ -50,3 +50,12 @@ class ConfigLight():
     which_epoch='latest'
     z_dim=256
     
+    #needed by spade resynth
+    def __init__(self, use_spade=False):
+        if use_spade:
+            self.num_upsampling_layers='more'  #more, normal  
+            self.gpu_ids=[0]
+            self.norm_G='spectralspadesyncbatch3x3'
+            use_vae=False
+            name='image-synthesis_spade'
+            netG='spade' #spade or pix2pixhd or condconv
