@@ -1,10 +1,11 @@
 import argparse
 import os
 from PIL import Image
-from estimator import AnomalyDetector, ICNET, DEEPLAB, SPADE, CCFPSE
 import numpy as np
 import time
 import cv2
+from estimator import AnomalyDetector, ICNET, DEEPLAB, SPADE, CCFPSE
+import colormap_helper
 
 # function for segmentations
 palette = [128, 64, 128, 244, 35, 232, 70, 70, 70, 102, 102, 156, 190, 153, 153,
@@ -62,6 +63,11 @@ if opts.verbose_save:
     os.makedirs(perceptual_diff_path, exist_ok=True)
 os.makedirs(concatenated_path, exist_ok=True)
 
+legend_path = "legend.png"
+legend_exists = os.path.exists(legend_path)
+if legend_exists:
+    legend = Image.open()
+
 for idx, image_path in enumerate(images):
     basename = os.path.basename(image_path).replace('.jpg', '.png')
     print('Evaluating image %i out of %i'%(idx+1, len(images)))
@@ -74,8 +80,12 @@ for idx, image_path in enumerate(images):
 
     basename = os.path.basename(image_path).replace('.png', '.jpg')
     anomaly_map = results['anomaly_map'].convert('RGB')
-    if opts.verbose_save:
 
+    anomaly_map = colormap_helper.falsecolor(anomaly_map)
+    if legend_exists:
+        colormap_helper.add_legend(anomaly_map, legend)
+
+    if opts.verbose_save:
         anomaly_map.save(os.path.join(anomaly_path,basename))
 
     semantic_map = colorize_mask(np.array(results['segmentation'])).convert('RGB')
