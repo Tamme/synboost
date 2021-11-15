@@ -57,10 +57,17 @@ gpu_info = trainer_util.activate_gpus(config)
 # Get data loaders
 cfg_train_loader = config['train_dataloader']
 cfg_val_loader = config['val_dataloader']
-cfg_test_loader1 = config['test_dataloader1']
-cfg_test_loader2 = config['test_dataloader2']
-cfg_test_loader3 = config['test_dataloader3']
-cfg_test_loader4 = config['test_dataloader4']
+
+#TODO HACKY atm just make a converter. later change yaml file
+cfg_test_loaders = {}
+if 'test_dataloader1' in config:
+    cfg_test_loaders['test_dataloader1'] = config['test_dataloader1']
+if 'test_dataloader2' in config:
+    cfg_test_loaders['test_dataloader2'] = config['test_dataloader2']
+if 'test_dataloader3' in config:
+    cfg_test_loaders['test_dataloader3'] = config['test_dataloader3']
+if 'test_dataloader4' in config:
+    cfg_test_loaders['test_dataloader4'] = config['test_dataloader4']
 
 # checks if we are using prior images
 prior = config['model']['prior']
@@ -68,18 +75,15 @@ prior = config['model']['prior']
 # adds logic to dataloaders (avoid repetition in config file)
 cfg_train_loader['dataset_args']['prior'] = prior
 cfg_val_loader['dataset_args']['prior'] = prior
-cfg_test_loader1['dataset_args']['prior'] = prior
-cfg_test_loader2['dataset_args']['prior'] = prior
-cfg_test_loader3['dataset_args']['prior'] = prior
-cfg_test_loader4['dataset_args']['prior'] = prior
+for key, test_cfg in cfg_test_loaders.items():
+    cfg_test_loaders[key]['dataset_args']['prior'] = prior
     
     
 train_loader = trainer_util.get_dataloader(cfg_train_loader['dataset_args'], cfg_train_loader['dataloader_args'])
 val_loader = trainer_util.get_dataloader(cfg_val_loader['dataset_args'], cfg_val_loader['dataloader_args'])
-test_loader1 = trainer_util.get_dataloader(cfg_test_loader1['dataset_args'], cfg_test_loader1['dataloader_args'])
-test_loader2 = trainer_util.get_dataloader(cfg_test_loader2['dataset_args'], cfg_test_loader2['dataloader_args'])
-test_loader3 = trainer_util.get_dataloader(cfg_test_loader3['dataset_args'], cfg_test_loader3['dataloader_args'])
-test_loader4 = trainer_util.get_dataloader(cfg_test_loader4['dataset_args'], cfg_test_loader4['dataloader_args'])
+test_loaders = {}
+for key in cfg_test_loaders.keys():
+    test_loaders[key] = trainer_util.get_dataloader(cfg_test_loaders[key]['dataset_args'], cfg_test_loaders[key]['dataloader_args'])
 
 if config['training_strategy']['image_visualization']:
     cfg_image_loader = config['img_dataloader']
@@ -88,7 +92,7 @@ if config['training_strategy']['image_visualization']:
     image_logger = ImgLogging(cfg_image_loader['dataset_args']['preprocess_mode'])
 
 # Getting parameters for test
-dataset = cfg_test_loader1['dataset_args']
+dataset = cfg_test_loaders[cfg_test_loaders.keys[0]]['dataset_args']
 h = int((dataset['crop_size']/dataset['aspect_ratio']))
 w = int(dataset['crop_size'])
 
@@ -170,208 +174,62 @@ for epoch in iter_counter.training_epochs():
             best_val_loss = avg_val_loss
             trainer.save(save_fdr, 'best', exp_name)
     
-    # Starts Testing (Test Set 1)
-        print('Starting Testing For %s' % os.path.basename(cfg_test_loader1['dataset_args']['dataroot']))
-        flat_pred = np.zeros(w * h * len(test_loader1))
-        flat_labels = np.zeros(w * h * len(test_loader1))
-        val_loss = 0
-        for i, data_i in enumerate(tqdm(test_loader1)):
-            original = data_i['original'].cuda()
-            semantic = data_i['semantic'].cuda()
-            synthesis = data_i['synthesis'].cuda()
-            label = data_i['label'].cuda()
-            
-            if prior:
-                entropy = data_i['entropy'].cuda()
-                mae = data_i['mae'].cuda()
-                distance = data_i['distance'].cuda()
-    
-                # Evaluating
-                loss, outputs = trainer.run_validation_prior(original, synthesis, semantic, label, entropy, mae,
-                                                             distance)
-            else:
-                loss, outputs = trainer.run_validation(original, synthesis, semantic, label)
+    # Starting Testing
+        for key in cfg_test_loaders.keys():
+            print('Starting Testing For %s' % os.path.basename(cfg_test_loaders[key]['dataset_args']['dataroot']))
+            test_loader = test_loaders[key]
+            flat_pred = np.zeros(w * h * len(test_loader))
+            flat_labels = np.zeros(w * h * len(test_loader))
+            val_loss = 0
+            for i, data_i in enumerate(tqdm(test_loader)):
+                original = data_i['original'].cuda()
+                semantic = data_i['semantic'].cuda()
+                synthesis = data_i['synthesis'].cuda()
+                label = data_i['label'].cuda()
                 
-            val_loss += loss
-            outputs = softmax(outputs)
-            (softmax_pred, predictions) = torch.max(outputs, dim=1)
-            flat_pred[i * w * h:i * w * h + w * h] = torch.flatten(outputs[:, 1, :, :]).detach().cpu().numpy()
-            flat_labels[i * w * h:i * w * h + w * h] = torch.flatten(label).detach().cpu().numpy()
+                if prior:
+                    entropy = data_i['entropy'].cuda()
+                    mae = data_i['mae'].cuda()
+                    distance = data_i['distance'].cuda()
+        
+                    # Evaluating
+                    loss, outputs = trainer.run_validation_prior(original, synthesis, semantic, label, entropy, mae,
+                                                                distance)
+                else:
+                    loss, outputs = trainer.run_validation(original, synthesis, semantic, label)
+                    
+                val_loss += loss
+                outputs = softmax(outputs)
+                (softmax_pred, predictions) = torch.max(outputs, dim=1)
+                flat_pred[i * w * h:i * w * h + w * h] = torch.flatten(outputs[:, 1, :, :]).detach().cpu().numpy()
+                flat_labels[i * w * h:i * w * h + w * h] = torch.flatten(label).detach().cpu().numpy()
 
-        if config['test_dataloader1']['dataset_args']['roi']:
-            invalid_indices = np.argwhere(flat_labels == 255)
-            flat_labels = np.delete(flat_labels, invalid_indices)
-            flat_pred = np.delete(flat_pred, invalid_indices)
+            if config[key]['dataset_args']['roi']:
+                invalid_indices = np.argwhere(flat_labels == 255)
+                flat_labels = np.delete(flat_labels, invalid_indices)
+                flat_pred = np.delete(flat_pred, invalid_indices)
 
-        print('Calculating metrics')
-        results = metrics.get_metrics(flat_labels, flat_pred)
-        print('AU_ROC: %f' % results['auroc'])
-        print('mAP: %f' % results['AP'])
-        print('FPR@95TPR: %f' % results['FPR@95%TPR'])
+            print('Calculating metrics')
+            results = metrics.get_metrics(flat_labels, flat_pred)
+            print('AU_ROC: %f' % results['auroc'])
+            print('mAP: %f' % results['AP'])
+            print('FPR@95TPR: %f' % results['FPR@95%TPR'])
 
-        avg_val_loss = val_loss / len(test_loader1)
-        test_writer.add_scalar('%s AUC_ROC' % os.path.basename(cfg_test_loader1['dataset_args']['dataroot']), results['auroc'], epoch)
-        test_writer.add_scalar('%s mAP' % os.path.basename(cfg_test_loader1['dataset_args']['dataroot']), results['AP'], epoch)
-        test_writer.add_scalar('%s FPR@95TPR' % os.path.basename(cfg_test_loader1['dataset_args']['dataroot']), results['FPR@95%TPR'], epoch)
-        test_writer.add_scalar('val_loss_%s' % os.path.basename(cfg_test_loader1['dataset_args']['dataroot']), avg_val_loss, epoch)
-        cumul_map_sum += results['AP']
-        # Starts Testing (Test Set 2)
-        print('Starting Testing For %s' % os.path.basename(cfg_test_loader2['dataset_args']['dataroot']))
-        flat_pred = np.zeros(w * h * len(test_loader2))
-        flat_labels = np.zeros(w * h * len(test_loader2))
-        val_loss = 0
-        for i, data_i in enumerate(tqdm(test_loader2)):
-            original = data_i['original'].cuda()
-            semantic = data_i['semantic'].cuda()
-            synthesis = data_i['synthesis'].cuda()
-            label = data_i['label'].cuda()
-            
-            if prior:
-                entropy = data_i['entropy'].cuda()
-                mae = data_i['mae'].cuda()
-                distance = data_i['distance'].cuda()
-    
-                # Evaluating
-                loss, outputs = trainer.run_validation_prior(original, synthesis, semantic, label, entropy, mae,
-                                                             distance)
-            else:
-                loss, outputs = trainer.run_validation(original, synthesis, semantic, label)
-                
-            val_loss += loss
-            outputs = softmax(outputs)
-            (softmax_pred, predictions) = torch.max(outputs, dim=1)
-            flat_pred[i * w * h:i * w * h + w * h] = torch.flatten(outputs[:, 1, :, :]).detach().cpu().numpy()
-            flat_labels[i * w * h:i * w * h + w * h] = torch.flatten(label).detach().cpu().numpy()
+            avg_val_loss = val_loss / len(test_loader)
+            test_writer.add_scalar('%s AUC_ROC' % os.path.basename(cfg_test_loaders[key]['dataset_args']['dataroot']), results['auroc'], epoch)
+            test_writer.add_scalar('%s mAP' % os.path.basename(cfg_test_loaders[key]['dataset_args']['dataroot']), results['AP'], epoch)
+            test_writer.add_scalar('%s FPR@95TPR' % os.path.basename(cfg_test_loaders[key]['dataset_args']['dataroot']), results['FPR@95%TPR'], epoch)
+            test_writer.add_scalar('val_loss_%s' % os.path.basename(cfg_test_loaders[key]['dataset_args']['dataroot']), avg_val_loss, epoch)
+            cumul_map_sum += results['AP']
 
-        if config['test_dataloader2']['dataset_args']['roi']:
-            invalid_indices = np.argwhere(flat_labels == 255)
-            flat_labels = np.delete(flat_labels, invalid_indices)
-            flat_pred = np.delete(flat_pred, invalid_indices)
-
-        avg_val_loss = val_loss / len(test_loader2)
-
-        print('Calculating metrics')
-        results = metrics.get_metrics(flat_labels, flat_pred)
-        print('AU_ROC: %f' % results['auroc'])
-        print('mAP: %f' % results['AP'])
-        print('FPR@95TPR: %f' % results['FPR@95%TPR'])
-
-        cumul_map_sum += results['AP']
-        test_writer.add_scalar('%s AUC_ROC' % os.path.basename(cfg_test_loader2['dataset_args']['dataroot']),
-                               results['auroc'], epoch)
-        test_writer.add_scalar('%s mAP' % os.path.basename(cfg_test_loader2['dataset_args']['dataroot']), results['AP'],
-                               epoch)
-        test_writer.add_scalar('%s FPR@95TPR' % os.path.basename(cfg_test_loader2['dataset_args']['dataroot']),
-                               results['FPR@95%TPR'], epoch)
-        test_writer.add_scalar('val_loss_%s' % os.path.basename(cfg_test_loader2['dataset_args']['dataroot']),
-                               avg_val_loss, epoch)
-
-        # Starts Testing (Test Set 3)
-        print('Starting Testing For %s' % os.path.basename(cfg_test_loader3['dataset_args']['dataroot']))
-        flat_pred = np.zeros(w * h * len(test_loader3))
-        flat_labels = np.zeros(w * h * len(test_loader3))
-        val_loss = 0
-        for i, data_i in enumerate(tqdm(test_loader3)):
-            original = data_i['original'].cuda()
-            semantic = data_i['semantic'].cuda()
-            synthesis = data_i['synthesis'].cuda()
-            label = data_i['label'].cuda()
-            
-            if prior:
-                entropy = data_i['entropy'].cuda()
-                mae = data_i['mae'].cuda()
-                distance = data_i['distance'].cuda()
-    
-                # Evaluating
-                loss, outputs = trainer.run_validation_prior(original, synthesis, semantic, label, entropy, mae,
-                                                             distance)
-            else:
-                loss, outputs = trainer.run_validation(original, synthesis, semantic, label)
-                
-            val_loss += loss
-            outputs = softmax(outputs)
-            (softmax_pred, predictions) = torch.max(outputs, dim=1)
-            flat_pred[i * w * h:i * w * h + w * h] = torch.flatten(outputs[:, 1, :, :]).detach().cpu().numpy()
-            flat_labels[i * w * h:i * w * h + w * h] = torch.flatten(label).detach().cpu().numpy()
-
-        if config['test_dataloader3']['dataset_args']['roi']:
-            invalid_indices = np.argwhere(flat_labels == 255)
-            flat_labels = np.delete(flat_labels, invalid_indices)
-            flat_pred = np.delete(flat_pred, invalid_indices)
-
-        print('Calculating metrics')
-        results = metrics.get_metrics(flat_labels, flat_pred)
-        print('AU_ROC: %f' % results['auroc'])
-        print('mAP: %f' % results['AP'])
-        print('FPR@95TPR: %f' % results['FPR@95%TPR'])
-        cumul_map_sum += results['AP']
-        avg_val_loss = val_loss / len(test_loader3)
-
-        test_writer.add_scalar('%s AUC_ROC' % os.path.basename(cfg_test_loader3['dataset_args']['dataroot']),
-                               results['auroc'], epoch)
-        test_writer.add_scalar('%s mAP' % os.path.basename(cfg_test_loader3['dataset_args']['dataroot']), results['AP'],
-                               epoch)
-        test_writer.add_scalar('%s FPR@95TPR' % os.path.basename(cfg_test_loader3['dataset_args']['dataroot']),
-                               results['FPR@95%TPR'], epoch)
-        test_writer.add_scalar('val_loss_%s' % os.path.basename(cfg_test_loader3['dataset_args']['dataroot']),
-                               avg_val_loss, epoch)
-
+        #used to be if key == 'test_dataloader3':
         if cumul_map_sum > best_map_metric:
             print('Cumulative mAP for epoch %d (%f) is better than previous best mAP (%f). Saving best model.'
-                  % (epoch, cumul_map_sum, best_map_metric))
+                % (epoch, cumul_map_sum, best_map_metric))
             best_map_metric = cumul_map_sum
             trainer.save(save_fdr, 'best_map', exp_name)
 
-        # Starts Testing (Test Set 4)
-        print('Starting Testing For %s' % os.path.basename(cfg_test_loader4['dataset_args']['dataroot']))
-        flat_pred = np.zeros(w * h * len(test_loader4))
-        flat_labels = np.zeros(w * h * len(test_loader4))
-        val_loss = 0
-        for i, data_i in enumerate(tqdm(test_loader4)):
-            original = data_i['original'].cuda()
-            semantic = data_i['semantic'].cuda()
-            synthesis = data_i['synthesis'].cuda()
-            label = data_i['label'].cuda()
-            
-            if prior:
-                entropy = data_i['entropy'].cuda()
-                mae = data_i['mae'].cuda()
-                distance = data_i['distance'].cuda()
-
-                # Evaluating
-                loss, outputs = trainer.run_validation_prior(original, synthesis, semantic, label, entropy, mae, distance)
-            else:
-                loss, outputs = trainer.run_validation(original, synthesis, semantic, label)
-                
-            val_loss += loss
-            outputs = softmax(outputs)
-            (softmax_pred, predictions) = torch.max(outputs, dim=1)
-            flat_pred[i * w * h:i * w * h + w * h] = torch.flatten(outputs[:, 1, :, :]).detach().cpu().numpy()
-            flat_labels[i * w * h:i * w * h + w * h] = torch.flatten(label).detach().cpu().numpy()
-
-        if config['test_dataloader4']['dataset_args']['roi']:
-            invalid_indices = np.argwhere(flat_labels == 255)
-            flat_labels = np.delete(flat_labels, invalid_indices)
-            flat_pred = np.delete(flat_pred, invalid_indices)
-
-        print('Calculating metrics')
-        results = metrics.get_metrics(flat_labels, flat_pred)
-        print('AU_ROC: %f' % results['auroc'])
-        print('mAP: %f' % results['AP'])
-        print('FPR@95TPR: %f' % results['FPR@95%TPR'])
-
-        avg_val_loss = val_loss / len(test_loader4)
-
-        test_writer.add_scalar('%s AUC_ROC' % os.path.basename(cfg_test_loader4['dataset_args']['dataroot']),
-                               results['auroc'], epoch)
-        test_writer.add_scalar('%s mAP' % os.path.basename(cfg_test_loader4['dataset_args']['dataroot']), results['AP'],
-                               epoch)
-        test_writer.add_scalar('%s FPR@95TPR' % os.path.basename(cfg_test_loader4['dataset_args']['dataroot']),
-                               results['FPR@95%TPR'], epoch)
-        test_writer.add_scalar('val_loss_%s' % os.path.basename(cfg_test_loader4['dataset_args']['dataroot']),
-                               avg_val_loss, epoch)
-
-        # Starts Image Visualization Module
+    # Starts Image Visualization Module
         if config['training_strategy']['image_visualization']:
             print('Starting Visualization For %s' % os.path.basename(cfg_image_loader['dataset_args']['dataroot']))
             for i, data_i in enumerate(tqdm(image_loader)):
