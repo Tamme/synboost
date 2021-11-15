@@ -92,7 +92,7 @@ if config['training_strategy']['image_visualization']:
     image_logger = ImgLogging(cfg_image_loader['dataset_args']['preprocess_mode'])
 
 # Getting parameters for test
-dataset = cfg_test_loaders[cfg_test_loaders.keys[0]]['dataset_args']
+dataset = cfg_test_loaders[list(cfg_test_loaders.keys())[0]]['dataset_args']
 h = int((dataset['crop_size']/dataset['aspect_ratio']))
 w = int(dataset['crop_size'])
 
