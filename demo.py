@@ -66,7 +66,7 @@ os.makedirs(concatenated_path, exist_ok=True)
 legend_path = "legend.png"
 legend_exists = os.path.exists(legend_path)
 if legend_exists:
-    legend = Image.open()
+    legend = Image.open(legend_path)
 
 for idx, image_path in enumerate(images):
     basename = os.path.basename(image_path).replace('.jpg', '.png')
