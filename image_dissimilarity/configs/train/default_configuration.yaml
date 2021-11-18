@@ -1,6 +1,7 @@
 # Name of the experiment for saving files
 experiment_name: replicate_best_mult_
 save_folder: /media/giancarlo/Samsung_T5/personal/master_thesis/cvpr/results/
+ensemble: True
 
 # Define training strategy
 training_strategy:

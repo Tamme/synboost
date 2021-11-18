@@ -201,7 +201,11 @@ for epoch in iter_counter.training_epochs():
                 val_loss += loss
                 outputs = softmax(outputs)
                 (softmax_pred, predictions) = torch.max(outputs, dim=1)
-                flat_pred[i * w * h:i * w * h + w * h] = torch.flatten(outputs[:, 1, :, :]).detach().cpu().numpy()
+                if config['ensemble']:
+                    soft_pred = outputs[:, 1, :, :] * 0.75 + entropy * 0.25
+                else:
+                    soft_pred = outputs[:, 1, :, :]
+                flat_pred[i * w * h:i * w * h + w * h] = torch.flatten(soft_pred).detach().cpu().numpy()
                 flat_labels[i * w * h:i * w * h + w * h] = torch.flatten(label).detach().cpu().numpy()
 
             if config[key]['dataset_args']['roi']:

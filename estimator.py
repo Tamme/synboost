@@ -11,6 +11,7 @@ import yaml
 import random
 from options.config_class import Config
 from options.config_class_light import ConfigLight
+from tensorflow.python.framework.ops import EagerTensor
 
 import sys
 sys.path.insert(0, os.path.join(os.getcwd(), os.path.dirname(__file__), 'image_segmentation'))
@@ -74,11 +75,16 @@ class AnomalyDetector():
         self.get_transformations()
         self.fishyscapes_wrapper= fishyscapes_wrapper
 
-    def estimator(self, image):
-        image_og_h = image.size[1]
-        image_og_w = image.size[0]
+    def estimator(self, image, verbose=True):
+        if type(image) == EagerTensor: #from estimator_worker
+            image_og_h = image.shape[0]
+            image_og_w = image.shape[1]
+            #img = Image.fromarray(np.array(image)).convert('RGB').resize((2048, 1024), resample=Image.BILINEAR)
+        else: #TODO ELIF #from estimator_image class 'PIL.PngImagePlugin.PngImageFile'>
+            image_og_h = image.size[1]
+            image_og_w = image.size[0]
+            #alternative img = image.resize((2048, 1024), resample=Image.BILINEAR) #matches cv2
         img = Image.fromarray(np.array(image)).convert('RGB').resize((2048, 1024), resample=Image.BILINEAR)
-        #alternative img = image.resize((2048, 1024), resample=Image.BILINEAR) #matches cv2
         
         if self.detector == ICNET:
             img_np = np.asarray(img, np.float32)
@@ -87,7 +93,7 @@ class AnomalyDetector():
             img_tensor = torch.from_numpy(img_np.copy())
             img_tensor = self.icnet_transform(img_tensor)
         else:
-            img_tensor = self.img_transform(image)
+            img_tensor = self.img_transform(img)
 
         # predict segmentation
         t0 = time.time()
@@ -205,7 +211,8 @@ class AnomalyDetector():
         text_output = "Fp 16: {} \n".format(self.fp16)
         text_output +=  "Segmentation {} sec \nProcessing {} sec \nSynthesis {} sec\nProcessing {} sec\nDissimilarity net {} sec\nTotal {}sec\n".format(
                 round(t1 - t0, 4), round(t2 - t1, 4), round(t3 - t2, 4), round(t4 - t3, 4), round(t5 - t4, 4), round(t5 - t0, 4))
-        print(text_output)
+        if verbose:
+            print(text_output)
          
         # Resize outputs to original input image size
         diss_pred = Image.fromarray(diss_pred.squeeze()*255).resize((image_og_w, image_og_h))
@@ -218,7 +225,8 @@ class AnomalyDetector():
         out = {'anomaly_map': diss_pred, 'segmentation': seg_img, 'synthesis': synthesis,
                'softmax_entropy':entropy, 'perceptual_diff': perceptual_diff, 'softmax_distance': distance, 'text': text_output}
     
-        print("Timing seg {} ".format(t1 - t0))
+        if verbose:
+            print("Timing seg {} ".format(t1 - t0))
         return out
 
     def estimator_image(self, image):
@@ -226,10 +234,10 @@ class AnomalyDetector():
     
     # Loop around all figures
     def estimator_worker(self, image):
-        result = self.estimator(image)
+        result = self.estimator(image, verbose=False)
         #out = {'anomaly_score': torch.tensor(result['anomaly_map']), 'segmentation': torch.tensor(seg_final)}
 
-        return torch.tensor(result['anomaly_map'])
+        return torch.tensor(np.array(result['anomaly_map'])/255.)
 
     def set_seeds(self, seed=0):
         # set seeds for reproducibility
